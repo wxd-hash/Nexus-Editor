@@ -619,3 +619,68 @@ describe("@floatboat/nexus-plugin-search", () => {
     container.remove();
   });
 });
+
+describe("fuzzy search", () => {
+  it("finds a subsequence match in a word", () => {
+    const matches = findSearchMatches("hello world amount", "amt", { fuzzy: true });
+    expect(matches.length).toBe(1);
+    // Text span from first to last matched char: a...t in "amount"
+    expect(matches[0].from).toBe(12); // "a" in "amount"
+    expect(matches[0].to).toBeGreaterThan(matches[0].from);
+  });
+
+  it("returns empty when no subsequence matches", () => {
+    const matches = findSearchMatches("hello world", "xyz", { fuzzy: true });
+    expect(matches).toEqual([]);
+  });
+
+  it("is case-insensitive by default", () => {
+    const matches = findSearchMatches("Hello Amount", "amt", { fuzzy: true });
+    expect(matches.length).toBe(1);
+  });
+
+  it("respects caseSensitive option", () => {
+    const matchesInsensitive = findSearchMatches("Hello Amount", "amt", {
+      fuzzy: true,
+    });
+    expect(matchesInsensitive.length).toBe(1);
+
+    const matchesSensitive = findSearchMatches("Hello Amount", "amt", {
+      fuzzy: true,
+      caseSensitive: true,
+    });
+    expect(matchesSensitive).toEqual([]);
+  });
+
+  it("replacesAllMatches returns doc unchanged in fuzzy mode", () => {
+    const result = replaceAllMatches("hello world", "hlo", "bye", { fuzzy: true });
+    expect(result).toBe("hello world");
+  });
+
+  it("handles empty query", () => {
+    const matches = findSearchMatches("hello world", "", { fuzzy: true });
+    expect(matches).toEqual([]);
+  });
+
+  it("handles query longer than any word", () => {
+    const matches = findSearchMatches("abc", "abcdxyz", { fuzzy: true });
+    expect(matches).toEqual([]);
+  });
+
+  it("consecutive matches score higher than scattered matches", () => {
+    const matches = findSearchMatches("hello halo", "hlo", { fuzzy: true });
+    expect(matches.length).toBe(2);
+  });
+
+  it("findSearchMatches without fuzzy option uses exact match", () => {
+    const matches = findSearchMatches("hello world", "hel", {});
+    expect(matches.length).toBe(1);
+    expect(matches[0].text).toBe("hel");
+  });
+
+  it("matches across word boundaries when query chars span words", () => {
+    // "br" matches "bread", "butter", and "brother"
+    const matches = findSearchMatches("bread butter brother", "br", { fuzzy: true });
+    expect(matches.length).toBe(3);
+  });
+});
