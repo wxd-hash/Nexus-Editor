@@ -3,13 +3,16 @@ import { showPreview, hidePreview } from "./preview-plugin";
 import { createStreamSession } from "./stream-handler";
 import type { AIPluginOptions, AISlashCommandDef } from "./types";
 
-const BUILTIN_COMMANDS: AISlashCommandDef[] = [
+type AICmd = AISlashCommandDef & { hotkey?: string };
+
+const BUILTIN_COMMANDS: AICmd[] = [
   {
     id: "ai-polish",
     title: "AI Polish",
     instruction: "Polish the wording",
     keywords: ["ai", "polish", "润色", "润饰"],
     description: "Improve wording and tone of the selected text",
+    hotkey: "Ctrl-Alt-p",
   },
   {
     id: "ai-translate",
@@ -17,6 +20,7 @@ const BUILTIN_COMMANDS: AISlashCommandDef[] = [
     instruction: "Translate to English",
     keywords: ["ai", "translate", "翻译", "英文"],
     description: "Translate the selected text to English",
+    hotkey: "Ctrl-Alt-t",
   },
   {
     id: "ai-expand",
@@ -24,6 +28,7 @@ const BUILTIN_COMMANDS: AISlashCommandDef[] = [
     instruction: "Expand into full text",
     keywords: ["ai", "expand", "扩写", "展开"],
     description: "Expand the selected outline into full paragraphs",
+    hotkey: "Ctrl-Alt-e",
   },
   {
     id: "ai-summarize",
@@ -31,13 +36,18 @@ const BUILTIN_COMMANDS: AISlashCommandDef[] = [
     instruction: "Summarize the key points",
     keywords: ["ai", "summarize", "总结", "摘要"],
     description: "Extract key points from the selected text",
+    hotkey: "Ctrl-Alt-s",
+  },
+  {
+    id: "ai-custom",
+    title: "AI Custom...",
+    instruction: "",
+    keywords: ["ai", "custom", "ask", "自定义"],
+    description: "Describe what you want the AI to do",
+    hotkey: "Ctrl-Alt-k",
   },
 ];
 
-/**
- * Get the paragraph range at the cursor position.
- * A paragraph is bounded by blank lines (double newline) or doc start/end.
- */
 function getParagraphRange(
   doc: string,
   cursor: number,
@@ -46,12 +56,8 @@ function getParagraphRange(
   let from = cursor;
   let to = cursor;
 
-  // Search backward for blank line or doc start
   while (from > 0) {
     if (from >= 1 && doc[from - 1] === "\n") {
-      const prev = from >= 2 ? doc[from - 2] : "";
-      if (prev === "\n") break;
-      // Check previous line is empty
       const lineStart = doc.lastIndexOf("\n", from - 2);
       const prevLine = doc.slice(lineStart + 1, from - 1).trim();
       if (prevLine === "") break;
@@ -59,7 +65,6 @@ function getParagraphRange(
     from--;
   }
 
-  // Search forward for blank line or doc end
   while (to < len) {
     if (doc[to] === "\n") {
       const nextLineStart = to + 1;
@@ -76,87 +81,104 @@ function getParagraphRange(
   return { from, to: Math.min(to + 1, len), text: doc.slice(from, to).trim() };
 }
 
-/** Convert an AISlashCommandDef to a SlashCommandDef with a run function. */
-function toSlashCommandDef(
-  cmd: AISlashCommandDef,
-  options: AIPluginOptions,
-): SlashCommandDef {
-  return {
-    id: cmd.id,
-    title: cmd.title,
-    keywords: cmd.keywords,
-    description: cmd.description,
-    run: (editor) => {
-      void runAICommand(editor, cmd, options);
-      return true;
-    },
-  };
-}
-
-/**
- * Execute an AI command on the editor.
- *
- * 1. Reads the selection (or falls back to the current paragraph).
- * 2. Shows a preview widget below the selection.
- * 3. Calls `options.onAIRun` with streaming params.
- * 4. On Accept → replaceRange, on Reject → hide, on Retry → re-run.
- */
-async function runAICommand(
-  editor: EditorAPI,
-  cmd: AISlashCommandDef,
-  options: AIPluginOptions,
-): Promise<void> {
+function getSelectionOrParagraph(editor: EditorAPI) {
   const doc = editor.getDocument();
-  const selection = editor.getSelection();
-
+  const sel = editor.getSelection();
   let from: number;
   let to: number;
-  let selectedText: string;
+  let text: string;
 
-  if (selection.anchor !== selection.head) {
-    // Has selection
-    from = Math.min(selection.anchor, selection.head);
-    to = Math.max(selection.anchor, selection.head);
-    selectedText = doc.slice(from, to);
+  if (sel.anchor !== sel.head) {
+    from = Math.min(sel.anchor, sel.head);
+    to = Math.max(sel.anchor, sel.head);
+    text = doc.slice(from, to);
   } else {
-    // No selection: take the current paragraph
-    const para = getParagraphRange(doc, selection.anchor);
+    const para = getParagraphRange(doc, sel.anchor);
     from = para.from;
     to = para.to;
-    selectedText = para.text;
+    text = para.text;
   }
 
+  return { from, to, text };
+}
+
+async function runAICommand(
+  editor: EditorAPI,
+  cmd: AICmd,
+  options: AIPluginOptions,
+  /** For ai-custom: the user-supplied instruction from the prompt widget. */
+  customInstruction?: string,
+): Promise<void> {
+  const doc = editor.getDocument();
+  const { from, to, text: selectedText } = getSelectionOrParagraph(editor);
   if (!selectedText.trim()) return;
 
   const textBefore = doc.slice(Math.max(0, from - 500), from);
   const textAfter = doc.slice(to, Math.min(doc.length, to + 200));
-
-  // Preview widget position: end of selection
   const previewPos = to;
 
+  const instruction = customInstruction ?? cmd.instruction;
+
+  // ai-custom: show prompt first, then re-enter with the user's instruction
+  if (!customInstruction && !instruction) {
+    const widget = showPreview(previewPos, "Custom", true);
+    if (!widget) return;
+
+    let lastDoc = editor.getDocument();
+    const onEditorChange = () => {
+      const currentDoc = editor.getDocument();
+      if (currentDoc !== lastDoc) {
+        lastDoc = currentDoc;
+        hidePreview();
+        editor.off("change", onEditorChange);
+        editor.off("selectionChange", onEditorChange);
+      }
+    };
+    editor.on("change", onEditorChange);
+    editor.on("selectionChange", onEditorChange);
+
+    widget.onReject(() => {
+      hidePreview();
+      editor.off("change", onEditorChange);
+      editor.off("selectionChange", onEditorChange);
+      editor.focus();
+    });
+
+    widget.onPromptSubmit(async (userInstruction) => {
+      editor.off("change", onEditorChange);
+      editor.off("selectionChange", onEditorChange);
+      hidePreview();
+      // Let CM6 process the hide effect before creating a new widget.
+      await new Promise((r) => requestAnimationFrame(r));
+      void runAICommand(editor, cmd, options, userInstruction);
+    });
+
+    return;
+  }
+
+  // Normal flow: show preview + stream AI output
   const controller = new AbortController();
   const stream = createStreamSession(controller.signal);
 
-  // Show preview
-  const widget = showPreview(previewPos, cmd.instruction);
+  const widget = showPreview(previewPos, instruction);
   if (!widget) return;
 
-  // Auto-cancel on user edit or cursor move
+  let lastDoc = editor.getDocument();
   const onEditorChange = () => {
-    controller.abort();
+    const currentDoc = editor.getDocument();
+    if (currentDoc !== lastDoc) {
+      lastDoc = currentDoc;
+      controller.abort();
+    }
   };
   editor.on("change", onEditorChange);
   editor.on("selectionChange", onEditorChange);
 
-  // Escape key to cancel
   const onKeydown = (e: KeyboardEvent) => {
-    if (e.key === "Escape") {
-      controller.abort();
-    }
+    if (e.key === "Escape") controller.abort();
   };
   document.addEventListener("keydown", onKeydown);
 
-  // Cleanup helpers
   let settled = false;
   const cleanup = () => {
     if (settled) return;
@@ -182,17 +204,14 @@ async function runAICommand(
   const doRetry = async () => {
     cleanup();
     hidePreview();
-    // Re-run after a tick so the old widget is fully cleaned up
     await new Promise((r) => setTimeout(r, 0));
-    await runAICommand(editor, cmd, options);
+    await runAICommand(editor, cmd, options, customInstruction);
   };
 
-  // Wire widget callbacks
   widget.onAccept(() => doAccept(stream.getAccumulated()));
   widget.onReject(doReject);
   widget.onRetry(() => void doRetry());
 
-  // Stream chunks to the widget
   const onChunk = (delta: string) => {
     stream.onChunk(delta);
     widget.appendChunk(delta);
@@ -200,7 +219,7 @@ async function runAICommand(
 
   try {
     await options.onAIRun({
-      instruction: cmd.instruction,
+      instruction,
       selectedText,
       textBefore,
       textAfter,
@@ -232,7 +251,22 @@ async function runAICommand(
   }
 }
 
-/** Get the full command list (built-in + custom). */
+function toSlashCommandDef(
+  cmd: AICmd,
+  options: AIPluginOptions,
+): SlashCommandDef {
+  return {
+    id: cmd.id,
+    title: cmd.title,
+    keywords: cmd.keywords,
+    description: cmd.description,
+    run: (editor) => {
+      void runAICommand(editor, cmd, options);
+      return true;
+    },
+  };
+}
+
 export function getSlashCommands(
   options: AIPluginOptions,
 ): SlashCommandDef[] {
@@ -243,4 +277,22 @@ export function getSlashCommands(
     toSlashCommandDef(cmd, options),
   );
   return [...builtin, ...custom];
+}
+
+export function getShortcuts(
+  options: AIPluginOptions,
+): Array<{ key: string; run: (editor: EditorAPI) => boolean }> {
+  const all = [
+    ...BUILTIN_COMMANDS,
+    ...(options.commands ?? []),
+  ];
+  return all
+    .filter((cmd) => cmd.hotkey)
+    .map((cmd) => ({
+      key: cmd.hotkey!,
+      run: (editor: EditorAPI) => {
+        void runAICommand(editor, cmd, options);
+        return true;
+      },
+    }));
 }

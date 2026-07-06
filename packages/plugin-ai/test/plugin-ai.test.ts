@@ -28,6 +28,7 @@ describe("@floatboat/nexus-plugin-ai", () => {
         "ai-translate",
         "ai-expand",
         "ai-summarize",
+        "ai-custom",
       ]);
     });
 
@@ -55,6 +56,7 @@ describe("@floatboat/nexus-plugin-ai", () => {
         "ai-translate",
         "ai-expand",
         "ai-summarize",
+        "ai-custom",
         "ai-proofread",
       ]);
     });

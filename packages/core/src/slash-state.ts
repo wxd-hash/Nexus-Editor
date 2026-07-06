@@ -23,7 +23,7 @@ export interface SlashStateResult {
   commands: SlashCommandDef[];
 }
 
-const DEFAULT_LIMIT = 8;
+const DEFAULT_LIMIT = 50;
 
 // Score tiers — higher tier wins regardless of secondary tiebreaker.
 // Keep the gaps wide enough that the tiebreaker can never bridge two
@@ -120,10 +120,6 @@ export function filterSlashCommands(
   query: string
 ): SlashCommandDef[] {
   if (query === "") {
-    // Empty query is the "menu just opened" case — keep the registration
-    // order so the host can choose a "frequently used first" layout via
-    // its plugin order instead of being overridden by an alphabetical
-    // sort it didn't ask for.
     return commands.slice();
   }
 

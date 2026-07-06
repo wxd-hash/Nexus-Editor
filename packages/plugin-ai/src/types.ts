@@ -19,6 +19,8 @@ export interface AISlashCommandDef {
   instruction: string;
   keywords?: string[];
   description?: string;
+  /** Keyboard shortcut (e.g. "Ctrl-Alt-p"). Registered as a global hotkey. */
+  hotkey?: string;
 }
 
 export interface AIPluginOptions {

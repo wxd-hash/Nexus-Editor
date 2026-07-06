@@ -136,10 +136,10 @@ describe("computeSlashState limit", () => {
     title: `Command ${i}`,
   }));
 
-  it("caps the result at the default limit of 8", () => {
+  it("returns all commands when under the default limit", () => {
     const state = computeSlashState("/com", 4, many);
     expect(state.isOpen).toBe(true);
-    expect(state.commands).toHaveLength(8);
+    expect(state.commands.length).toBe(12);
   });
 
   it("honours an explicit limit option", () => {

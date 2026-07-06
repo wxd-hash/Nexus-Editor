@@ -3,33 +3,36 @@ import type { PreviewState } from "./types";
 
 /**
  * Block widget that renders the AI preview card below the selection.
- * Streaming text is appended to the content area via `appendChunk()`.
- * When the stream ends, call `setState("done", result)` to reveal
- * the Accept / Reject / Retry buttons.
+ *
+ * Two modes:
+ * - **Direct**: Streaming output immediately (for built-in commands).
+ * - **Prompt**: Shows a textarea first for custom instructions, then
+ *   transitions to streaming after the user submits.
  */
 export class PreviewWidget extends WidgetType {
   private contentEl: HTMLElement | null = null;
   private actionsEl: HTMLElement | null = null;
   private statusEl: HTMLElement | null = null;
+  private titleEl: HTMLElement | null = null;
+  private promptEl: HTMLElement | null = null;
   private state: PreviewState = { status: "loading" };
 
   private _onAccept: (() => void) | null = null;
   private _onReject: (() => void) | null = null;
   private _onRetry: (() => void) | null = null;
+  private _onPromptSubmit: ((instruction: string) => void) | null = null;
 
-  constructor(private instruction: string) {
+  constructor(private instruction: string, private promptMode = false) {
     super();
   }
 
-  eq(): boolean {
-    // Never replace — the widget manages its own DOM updates
+  eq(_other: WidgetType): boolean {
     return true;
   }
 
   toDOM(): HTMLElement {
     const card = document.createElement("div");
     card.className = "nexus-ai-preview";
-    card.setAttribute("data-nexus-ai-preview", "true");
 
     // Header
     const header = document.createElement("div");
@@ -39,21 +42,24 @@ export class PreviewWidget extends WidgetType {
     this.statusEl.className = "nexus-ai-preview-status";
     this.statusEl.textContent = "\u{1F916}";
 
-    const title = document.createElement("span");
-    title.className = "nexus-ai-preview-title";
-    title.textContent = `AI ${this.instruction}`;
+    this.titleEl = document.createElement("span");
+    this.titleEl.className = "nexus-ai-preview-title";
+    this.titleEl.textContent = `AI ${this.instruction}`;
 
-    header.append(this.statusEl, title);
+    header.append(this.statusEl, this.titleEl);
 
     // Content
     this.contentEl = document.createElement("div");
     this.contentEl.className = "nexus-ai-preview-content";
 
-    // Loading dots
-    const loader = document.createElement("span");
-    loader.className = "nexus-ai-preview-loader";
-    loader.textContent = "...";
-    this.contentEl.appendChild(loader);
+    if (this.promptMode) {
+      this.buildPromptInput();
+    } else {
+      const loader = document.createElement("span");
+      loader.className = "nexus-ai-preview-loader";
+      loader.textContent = "...";
+      this.contentEl.appendChild(loader);
+    }
 
     // Actions (hidden until done/error)
     this.actionsEl = document.createElement("div");
@@ -89,35 +95,93 @@ export class PreviewWidget extends WidgetType {
     return this.toDOM();
   }
 
-  /** Append streaming text to the content area. */
+  // ---- prompt mode ----
+
+  private buildPromptInput(): void {
+    if (!this.contentEl) return;
+
+    this.promptEl = document.createElement("div");
+    this.promptEl.className = "nexus-ai-prompt";
+
+    const textarea = document.createElement("textarea");
+    textarea.className = "nexus-ai-prompt-input";
+    textarea.placeholder = "Describe what you want the AI to do...";
+    textarea.rows = 2;
+    textarea.style.cssText =
+      "width:100%;box-sizing:border-box;border:1px solid var(--nexus-border-subtle,#d0d7de);" +
+      "border-radius:6px;padding:8px;font:inherit;resize:vertical;min-height:44px;" +
+      "background:var(--nexus-bg,#fff);color:var(--nexus-text,#1f2328);";
+
+    const sendBtn = this.makeBtn("Send", "primary");
+    sendBtn.style.marginTop = "6px";
+
+    const submit = () => {
+      const val = textarea.value.trim();
+      if (!val) return;
+      textarea.disabled = true;
+      sendBtn.disabled = true;
+      this._onPromptSubmit?.(val);
+    };
+
+    sendBtn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      submit();
+    });
+    textarea.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        submit();
+      }
+    });
+
+    this.promptEl.append(textarea, sendBtn);
+    this.contentEl.appendChild(this.promptEl);
+
+    // Auto-focus the textarea after it's in the DOM
+    requestAnimationFrame(() => textarea.focus());
+  }
+
+  onPromptSubmit(cb: (instruction: string) => void): void {
+    this._onPromptSubmit = cb;
+  }
+
+  // ---- streaming ----
+
   appendChunk(delta: string): void {
     if (!this.contentEl) return;
-    // Remove loader on first chunk
     const loader = this.contentEl.querySelector(".nexus-ai-preview-loader");
     if (loader) loader.remove();
-
-    // Append as text node to preserve formatting
     this.contentEl.appendChild(document.createTextNode(delta));
   }
 
-  /** Transition to done or error state. */
+  // ---- state ----
+
   setState(state: PreviewState): void {
     this.state = state;
-    if (!this.statusEl || !this.actionsEl) return;
+    if (!this.statusEl || !this.actionsEl || !this.contentEl) return;
 
     if (state.status === "done") {
       this.statusEl.textContent = "✅";
       this.actionsEl.style.display = "flex";
     } else if (state.status === "error") {
       this.statusEl.textContent = "⚠️";
-      // Show error + retry-only
+      const loader = this.contentEl.querySelector(".nexus-ai-preview-loader");
+      if (loader) loader.remove();
+      const existingErr = this.contentEl.querySelector(".nexus-ai-preview-error");
+      if (!existingErr) {
+        const errEl = document.createElement("div");
+        errEl.className = "nexus-ai-preview-error";
+        errEl.textContent = state.message;
+        errEl.style.color = "var(--nexus-hl-deletion, #c33)";
+        this.contentEl.appendChild(errEl);
+      }
       const retryBtn = this.actionsEl.querySelector(
         "[data-action=retry]"
       ) as HTMLElement | null;
       if (retryBtn) {
         this.actionsEl.style.display = "flex";
-        // Hide accept/reject, show only retry
-        for (const child of this.actionsEl.children) {
+        for (const child of Array.from(this.actionsEl.children)) {
           (child as HTMLElement).style.display =
             child === retryBtn ? "" : "none";
         }
@@ -125,20 +189,15 @@ export class PreviewWidget extends WidgetType {
     }
   }
 
-  onAccept(cb: () => void): void {
-    this._onAccept = cb;
-  }
-  onReject(cb: () => void): void {
-    this._onReject = cb;
-  }
-  onRetry(cb: () => void): void {
-    this._onRetry = cb;
-  }
+  onAccept(cb: () => void): void { this._onAccept = cb; }
+  onReject(cb: () => void): void { this._onReject = cb; }
+  onRetry(cb: () => void): void { this._onRetry = cb; }
 
   destroy(): void {
     this.contentEl = null;
     this.actionsEl = null;
     this.statusEl = null;
+    this.promptEl = null;
   }
 
   private makeBtn(
@@ -157,7 +216,8 @@ export class PreviewWidget extends WidgetType {
   }
 }
 
-/** One-time style injection for the preview card. */
+// ---- Styles ----
+
 let stylesInjected = false;
 export function injectPreviewStyles(): void {
   if (stylesInjected) return;
@@ -182,9 +242,7 @@ export function injectPreviewStyles(): void {
   border-bottom: 1px solid var(--nexus-border-subtle, #d0d7de);
   background: var(--nexus-bg, #fff);
 }
-.nexus-ai-preview-status {
-  font-size: 14px;
-}
+.nexus-ai-preview-status { font-size: 14px; }
 .nexus-ai-preview-title {
   font-weight: 600;
   color: var(--nexus-text, #1f2328);
@@ -201,9 +259,7 @@ export function injectPreviewStyles(): void {
   color: var(--nexus-text-muted, #656d76);
   animation: nexus-ai-blink 1s step-end infinite;
 }
-@keyframes nexus-ai-blink {
-  50% { opacity: 0; }
-}
+@keyframes nexus-ai-blink { 50% { opacity: 0; } }
 .nexus-ai-preview-actions {
   display: flex;
   gap: 6px;
@@ -222,17 +278,13 @@ export function injectPreviewStyles(): void {
   cursor: pointer;
   transition: background .15s;
 }
-.nexus-ai-preview-btn:hover {
-  background: var(--nexus-bg-hover, #eaeef2);
-}
+.nexus-ai-preview-btn:hover { background: var(--nexus-bg-hover, #eaeef2); }
 .nexus-ai-preview-btn--primary {
   background: var(--nexus-accent, #7c6cf4);
   color: #fff;
   border-color: var(--nexus-accent, #7c6cf4);
 }
-.nexus-ai-preview-btn--primary:hover {
-  opacity: 0.88;
-}
+.nexus-ai-preview-btn--primary:hover { opacity: 0.88; }
 `;
   const style = document.createElement("style");
   style.setAttribute("data-nexus-ai-preview-styles", "true");

@@ -69,9 +69,13 @@ export function previewExtension() {
  * widget instance so callers can set callbacks and stream text.
  * Returns null if the editor view is not available.
  */
-export function showPreview(pos: number, instruction: string): PreviewWidget | null {
+export function showPreview(
+  pos: number,
+  instruction: string,
+  promptMode = false,
+): PreviewWidget | null {
   if (!viewRef) return null;
-  const widget = new PreviewWidget(instruction);
+  const widget = new PreviewWidget(instruction, promptMode);
   viewRef.dispatch({ effects: showPreviewEffect.of({ pos, widget }) });
   return widget;
 }

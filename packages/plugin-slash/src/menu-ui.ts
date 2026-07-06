@@ -140,6 +140,9 @@ export function createSlashMenuUI(
     }
     if (itemEls.length > 0 && highlight >= 0 && highlight < itemEls.length) {
       root.setAttribute("aria-activedescendant", itemEls[highlight].id);
+      if (typeof itemEls[highlight].scrollIntoView === "function") {
+        itemEls[highlight].scrollIntoView({ block: "nearest" });
+      }
     } else {
       root.removeAttribute("aria-activedescendant");
     }
